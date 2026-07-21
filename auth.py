@@ -1,11 +1,21 @@
 """Authentification AgroSmart via Neon PostgreSQL."""
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
 
 from db.neon import ensure_schema, get_connection, get_user_by_email as _get_user_by_email
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def hash_password(password: str) -> str:
@@ -58,7 +68,7 @@ def authenticate_user(email: str, password: str) -> Optional[str]:
 
 def save_reset_code(email: str, code: str, expiry_minutes: int = 10) -> None:
     email_norm = email.strip().lower()
-    expires_at = datetime.now() + timedelta(minutes=expiry_minutes)
+    expires_at = _utc_now() + timedelta(minutes=expiry_minutes)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -89,7 +99,7 @@ def verify_reset_code(email: str, code: str) -> bool:
             if not row:
                 return False
             stored_code, expires_at = row
-            return stored_code == code.strip() and datetime.now() < expires_at
+            return stored_code == code.strip() and _utc_now() < _as_utc(expires_at)
 
 
 def update_user_password(email: str, new_password: str) -> bool:

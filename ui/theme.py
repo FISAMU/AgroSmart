@@ -40,6 +40,12 @@ SVG = {
     "ph": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6v7a3 3 0 1 1-6 0V3z"/><line x1="9" y1="3" x2="15" y2="3"/><path d="M12 13v8"/><path d="M8 21h8"/></svg>',
     "chart": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
     "live": '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>',
+    "mail": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>',
+    "check": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
+    "arrow_left": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
+    "save": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
+    "success": '<svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg>',
+    "lock": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
 }
 
 DASHBOARD_NAV = [
@@ -496,10 +502,21 @@ body {{
     width:100%; padding:13px; border:none; border-radius:12px;
     background:linear-gradient(135deg,{COLORS["forest"]},{COLORS["mint"]});
     color:white; font-family:inherit; font-size:0.9rem; font-weight:700; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
 }}
+.modal-btn .btn-icon {{ display:inline-flex; align-items:center; flex-shrink:0; }}
 .modal-btn.secondary {{
     background:transparent; color:{COLORS["green"]};
     border:1.5px solid #E2EBE4;
+}}
+.modal-status {{
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    color:#6B7C72; font-size:0.82rem; text-align:center; line-height:1.5;
+}}
+.modal-status .status-icon {{ display:inline-flex; color:{COLORS["mint"]}; }}
+.modal-success-icon {{
+    display:flex; align-items:center; justify-content:center;
+    color:{COLORS["mint"]}; margin:4px 0;
 }}
 .modal-feedback {{ text-align:center; font-size:0.82rem; min-height:16px; color:#E76F51; }}
 .modal-step {{ display:none; flex-direction:column; gap:14px; }}

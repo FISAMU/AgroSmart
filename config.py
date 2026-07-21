@@ -12,11 +12,18 @@ try:
 except ImportError:
     pass
 
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+def _env(name: str, default: str = "") -> str:
+    value = os.getenv(name, default)
+    if not value:
+        return default
+    return value.strip().strip('"').strip("'")
 
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+
+EMAIL_ADDRESS = _env("EMAIL_ADDRESS")
+EMAIL_PASSWORD = _env("EMAIL_PASSWORD").replace(" ", "")
+
+SMTP_SERVER = _env("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(_env("SMTP_PORT", "587") or "587")
 
 CODE_EXPIRY_MINUTES = 10
 

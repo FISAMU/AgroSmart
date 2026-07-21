@@ -2,7 +2,7 @@ import streamlit as st
 import os, random, string, smtplib, datetime
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from ui.theme import AUTH_CSS, STREAMLIT_HIDE, auth_visual_img_tag
+from ui.theme import AUTH_CSS, STREAMLIT_HIDE, SVG, auth_visual_img_tag
 
 from auth import (
     authenticate_user,
@@ -11,56 +11,23 @@ from auth import (
     update_user_password,
 )
 from db.neon import ensure_schema, get_user_by_email
-
-ensure_schema()
-
 from config import CODE_EXPIRY_MINUTES
-
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-st.set_page_config(page_title="AgroSmart – Connexion", layout="wide", initial_sidebar_state="collapsed")
-st.set_option("client.showSidebarNavigation", False)
-
-# ── Navigation entrante ──
-if "goto" in st.query_params:
-    dest = st.query_params["goto"]
-    if dest == "register":
-        st.switch_page("pages/Inscription.py")
-
-if st.session_state.get("reg_success"):
-    st.toast(st.session_state["reg_success"], icon="✅")
-    del st.session_state["reg_success"]
-
-
-# ── Styles Streamlit ──
-st.markdown(STREAMLIT_HIDE + """
-<style>
-    .block-container { padding: 0 !important; margin: 0 !important; max-width: 100vw !important; margin-top: 0 !important; }
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stApp"],
-    section[data-testid="stMain"] > div, [data-testid="stVerticalBlock"] {
-        margin: 0 !important; padding: 0 !important; background: #F7F4EE !important;
-    }
-    iframe { display: block !important; background: #F7F4EE; }
-</style>
-""", unsafe_allow_html=True)
-
-auth_bg_img = auth_visual_img_tag()
-
-# ══════════════════════════════════════
-#  LOGIQUE RÉINITIALISATION MOT DE PASSE
-# ══════════════════════════════════════
 def generate_code(length=6):
-    return ''.join(random.choices(string.digits, k=length))
+    return "".join(random.choices(string.digits, k=length))
+
 
 def send_reset_email(to_email: str, code: str) -> bool:
     try:
         from config import EMAIL_ADDRESS, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT
+
         msg = MIMEMultipart("alternative")
         msg["Subject"] = "AgroSmart – Code de réinitialisation"
-        msg["From"]    = f"AgroSmart <{EMAIL_ADDRESS}>"
-        msg["To"]      = to_email
+        msg["From"] = f"AgroSmart <{EMAIL_ADDRESS}>"
+        msg["To"] = to_email
 
         html_body = f"""
         <div style="font-family:Poppins,sans-serif;max-width:480px;margin:auto;background:#f8fdf9;
@@ -103,165 +70,185 @@ def send_reset_email(to_email: str, code: str) -> bool:
         """
         msg.attach(MIMEText(html_body, "html"))
 
-        import time
-        start_time = time.time()
-        
-        with open("login_debug.log", "a") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: Connexion à {SMTP_SERVER}:{SMTP_PORT}...\n")
-
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=15) as server:
-            with open("login_debug.log", "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: Connecté. ({time.time()-start_time:.2f}s). EHLO...\n")
             server.ehlo()
-            
-            with open("login_debug.log", "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: STARTTLS... ({time.time()-start_time:.2f}s)\n")
             server.starttls()
-            
-            with open("login_debug.log", "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: Login en cours... ({time.time()-start_time:.2f}s)\n")
             server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            
-            with open("login_debug.log", "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: Envoi à {to_email}... ({time.time()-start_time:.2f}s)\n")
             server.sendmail(EMAIL_ADDRESS, to_email, msg.as_string())
-            
-        with open("login_debug.log", "a") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] SMTP: Terminé avec succès ! Temps total : {time.time()-start_time:.2f}s\n")
         return True
     except Exception as e:
-        import time
-        with open("login_debug.log", "a") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] SMTP ERROR: {e}\n")
         st.session_state["reset_error"] = str(e)
         return False
 
-# ── Gestion des actions ──
-action = st.query_params.get("action", "")
 
-import time
-with open("login_debug.log", "a") as f:
-    f.write(f"[{time.strftime('%H:%M:%S')}] Connexion.py loaded. Action: '{action}', Session user: '{st.session_state.get('user', '')}'\n")
-
-# ── Gestion des actions AJAX ──
-action = st.query_params.get("action", "")
+st.set_page_config(page_title="AgroSmart – Connexion", layout="wide", initial_sidebar_state="collapsed")
+st.set_option("client.showSidebarNavigation", False)
 
 JS_BCAST = """<script>let p=window.parent;while(p){p.postMessage({msg}, '*');if(p===window.top)break;p=p.parent;}</script>"""
+action = st.query_params.get("action", "")
 
-if action == "login_ajax":
-    email = st.query_params.get("email", "").strip()
-    pwd = st.query_params.get("pwd", "")
-    try:
-        user_id = authenticate_user(email, pwd)
-        if user_id:
-            msg = f"{{type: 'login_result', success: true, uid: '{user_id}'}}"
-        else:
-            msg = "{type: 'login_result', success: false, msg: 'Email ou mot de passe incorrect.'}"
-    except Exception:
-        msg = "{type: 'login_result', success: false, msg: 'Erreur lors de la connexion.'}"
-    st.components.v1.html(JS_BCAST.replace("{msg}", msg))
-    st.stop()
+# ── Réponses AJAX rapides (sans recharger toute la page) ──
+if action in {"login_ajax", "forgot_ajax", "verify_ajax", "reset_ajax", "login_success"}:
+    if action == "forgot_ajax":
+        ensure_schema()
 
-if action == "forgot_ajax":
-    email_to = st.query_params.get("email", "").strip()
-
-    try:
-        user = get_user_by_email(email_to)
-        if not user:
-            st.components.v1.html(
-                JS_BCAST.replace(
-                    "{msg}",
-                    "{type: 'forgot_result', success: false, msg: 'Aucun compte associé à cet email.'}",
-                )
-            )
-            st.stop()
-
-        code = generate_code()
-        save_reset_code(email_to, code, CODE_EXPIRY_MINUTES)
-        ok = send_reset_email(email_to, code)
-        if ok:
-            st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'forgot_result', success: true}"))
-        else:
-            st.components.v1.html(
-                JS_BCAST.replace(
-                    "{msg}",
-                    "{type: 'forgot_result', success: false, msg: 'Erreur lors de l envoi du mail.'}",
-                )
-            )
-    except Exception:
-        st.components.v1.html(
-            JS_BCAST.replace(
-                "{msg}",
-                "{type: 'forgot_result', success: false, msg: 'Erreur lors de la vérification.'}",
-            )
-        )
-    st.stop()
-
-if action == "verify_ajax":
-    entered = st.query_params.get("code", "").strip()
-    email_to = st.query_params.get("email", "").strip()
-    if verify_reset_code(email_to, entered):
-        st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'verify_result', success: true}"))
-    else:
-        st.components.v1.html(
-            JS_BCAST.replace(
-                "{msg}",
-                "{type: 'verify_result', success: false, msg: 'Code incorrect ou expiré.'}",
-            )
-        )
-    st.stop()
-
-if action == "reset_ajax":
-    pwd = st.query_params.get("pwd", "")
-    email = st.query_params.get("email", "").strip()
-    code = st.query_params.get("code", "").strip()
-
-    if verify_reset_code(email, code):
+    if action == "login_ajax":
+        email = st.query_params.get("email", "").strip()
+        pwd = st.query_params.get("pwd", "")
         try:
-            if update_user_password(email, pwd):
-                st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'reset_result', success: true}"))
+            user_id = authenticate_user(email, pwd)
+            if user_id:
+                msg = f"{{type: 'login_result', success: true, uid: '{user_id}'}}"
+            else:
+                msg = "{type: 'login_result', success: false, msg: 'Email ou mot de passe incorrect.'}"
+        except Exception:
+            msg = "{type: 'login_result', success: false, msg: 'Erreur lors de la connexion.'}"
+        st.components.v1.html(JS_BCAST.replace("{msg}", msg), height=0)
+        st.stop()
+
+    if action == "forgot_ajax":
+        email_to = st.query_params.get("email", "").strip()
+        try:
+            user = get_user_by_email(email_to)
+            if not user:
+                st.components.v1.html(
+                    JS_BCAST.replace(
+                        "{msg}",
+                        "{type: 'forgot_result', success: false, msg: 'Aucun compte associé à cet email.'}",
+                    ),
+                    height=0,
+                )
+                st.stop()
+            code = generate_code()
+            save_reset_code(email_to, code, CODE_EXPIRY_MINUTES)
+            ok = send_reset_email(email_to, code)
+            if ok:
+                st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'forgot_result', success: true}"), height=0)
             else:
                 st.components.v1.html(
                     JS_BCAST.replace(
                         "{msg}",
-                        "{type: 'reset_result', success: false, msg: 'Erreur lors de la réinitialisation.'}",
+                        "{type: 'forgot_result', success: false, msg: 'Erreur lors de l envoi du mail.'}",
+                    ),
+                    height=0,
+                )
+        except Exception:
+            st.components.v1.html(
+                JS_BCAST.replace(
+                    "{msg}",
+                    "{type: 'forgot_result', success: false, msg: 'Erreur lors de la vérification.'}",
+                ),
+                height=0,
+            )
+        st.stop()
+
+    if action == "verify_ajax":
+        entered = st.query_params.get("code", "").strip()
+        email_to = st.query_params.get("email", "").strip()
+        try:
+            ok = verify_reset_code(email_to, entered)
+            if ok:
+                st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'verify_result', success: true}"), height=0)
+            else:
+                st.components.v1.html(
+                    JS_BCAST.replace(
+                        "{msg}",
+                        "{type: 'verify_result', success: false, msg: 'Code incorrect ou expiré.'}",
+                    ),
+                    height=0,
+                )
+        except Exception:
+            st.components.v1.html(
+                JS_BCAST.replace(
+                    "{msg}",
+                    "{type: 'verify_result', success: false, msg: 'Erreur lors de la vérification.'}",
+                ),
+                height=0,
+            )
+        st.stop()
+
+    if action == "reset_ajax":
+        pwd = st.query_params.get("pwd", "")
+        email = st.query_params.get("email", "").strip()
+        code = st.query_params.get("code", "").strip()
+        try:
+            if verify_reset_code(email, code):
+                if update_user_password(email, pwd):
+                    st.components.v1.html(JS_BCAST.replace("{msg}", "{type: 'reset_result', success: true}"), height=0)
+                else:
+                    st.components.v1.html(
+                        JS_BCAST.replace(
+                            "{msg}",
+                            "{type: 'reset_result', success: false, msg: 'Erreur lors de la réinitialisation.'}",
+                        ),
+                        height=0,
                     )
+            else:
+                st.components.v1.html(
+                    JS_BCAST.replace(
+                        "{msg}",
+                        "{type: 'reset_result', success: false, msg: 'Session invalide ou expirée.'}",
+                    ),
+                    height=0,
                 )
         except ValueError as e:
             st.components.v1.html(
                 JS_BCAST.replace(
                     "{msg}",
                     f"{{type: 'reset_result', success: false, msg: '{str(e)}'}}",
-                )
+                ),
+                height=0,
             )
-    else:
-        st.components.v1.html(
-            JS_BCAST.replace(
-                "{msg}",
-                "{type: 'reset_result', success: false, msg: 'Session invalide ou expirée.'}",
+        except Exception:
+            st.components.v1.html(
+                JS_BCAST.replace(
+                    "{msg}",
+                    "{type: 'reset_result', success: false, msg: 'Erreur lors de la réinitialisation.'}",
+                ),
+                height=0,
             )
-        )
-    st.stop()
+        st.stop()
 
-if action == "login_success":
-    uid = st.query_params.get("uid", "").strip()
-    if uid:
-        st.session_state["user"] = uid
-        st.session_state["show_success"] = "Connexion réussie ! Bienvenue sur AgroSmart."
-        with open("login_debug.log", "a") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] Login success registered. User ID: {uid}\n")
-    st.query_params.clear()
-    st.rerun()
+    if action == "login_success":
+        uid = st.query_params.get("uid", "").strip()
+        if uid:
+            st.session_state["user"] = uid
+            st.session_state["show_success"] = "Connexion réussie ! Bienvenue sur AgroSmart."
+        st.query_params.clear()
+        st.rerun()
+
+ensure_schema()
+
+# ── Navigation entrante ──
+if "goto" in st.query_params:
+    dest = st.query_params["goto"]
+    if dest == "register":
+        st.switch_page("pages/Inscription.py")
+
+if st.session_state.get("reg_success"):
+    st.toast(st.session_state["reg_success"], icon="✅")
+    del st.session_state["reg_success"]
 
 
+# ── Styles Streamlit ──
+st.markdown(STREAMLIT_HIDE + """
+<style>
+    .block-container { padding: 0 !important; margin: 0 !important; max-width: 100vw !important; margin-top: 0 !important; }
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stApp"],
+    section[data-testid="stMain"] > div, [data-testid="stVerticalBlock"] {
+        margin: 0 !important; padding: 0 !important; background: #F7F4EE !important;
+    }
+    iframe { display: block !important; background: #F7F4EE; }
+</style>
+""", unsafe_allow_html=True)
+
+auth_bg_img = auth_visual_img_tag()
 
 login_error     = st.session_state.get("login_error", "")
 if "login_error" in st.session_state: del st.session_state["login_error"]
 
 # Redirection si connecté
 if st.session_state.get("user"):
-    with open("login_debug.log", "a") as f:
-        f.write(f"[{time.strftime('%H:%M:%S')}] Switching page to Tableau_de_bord.py\n")
     st.switch_page("pages/Tableau_de_bord.py")
 
 
@@ -337,11 +324,8 @@ html_code = f"""
 <!-- ══ MODAL MOT DE PASSE OUBLIÉ ══ -->
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
-    <h2 style="display:flex;align-items:center;gap:8px">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-      </svg>
+    <h2 style="display:flex;align-items:center;justify-content:center;gap:8px">
+      {SVG["lock"]}
       Mot de passe oublié
     </h2>
 
@@ -352,7 +336,10 @@ html_code = f"""
         <input id="resetEmail" type="email" placeholder="exemple@email.com">
       </div>
       <div class="modal-feedback" id="fb1"></div>
-      <button class="modal-btn" id="send-code-btn" onclick="sendCode()">📨 Envoyer le code</button>
+      <button class="modal-btn" id="send-code-btn" onclick="sendCode()">
+        <span class="btn-icon">{SVG["mail"]}</span>
+        Envoyer le code
+      </button>
       <button class="modal-btn secondary" id="close-modal-btn" onclick="closeModal()">Annuler</button>
 
     </div>
@@ -362,14 +349,23 @@ html_code = f"""
       <p id="step2Msg">Un code à 6 chiffres a été envoyé à <strong id="sentTo"></strong></p>
       <input id="codeInput" type="text" maxlength="6" placeholder="000000" inputmode="numeric">
       <div class="modal-feedback" id="fb2"></div>
-      <button class="modal-btn" id="verify-code-btn" onclick="verifyCode()">✅ Vérifier le code</button>
-      <button class="modal-btn secondary" id="back-step1-btn" onclick="goStep(1)">← Retour</button>
+      <button class="modal-btn" id="verify-code-btn" onclick="verifyCode()">
+        <span class="btn-icon">{SVG["check"]}</span>
+        Vérifier le code
+      </button>
+      <button class="modal-btn secondary" id="back-step1-btn" onclick="goStep(1)">
+        <span class="btn-icon">{SVG["arrow_left"]}</span>
+        Retour
+      </button>
 
     </div>
 
     <!-- Étape 3 : nouveau mot de passe -->
     <div class="modal-step" id="step3">
-      <p>Code vérifié ✅ Entrez votre nouveau mot de passe.</p>
+      <p class="modal-status">
+        <span class="status-icon">{SVG["check"]}</span>
+        Code vérifié. Entrez votre nouveau mot de passe.
+      </p>
       <div class="input-wrap" style="margin:0;letter-spacing:normal">
         <input id="newPwd" type="password" placeholder="Nouveau mot de passe" style="letter-spacing:normal;font-size:.9rem;font-weight:400">
       </div>
@@ -377,13 +373,16 @@ html_code = f"""
         <input id="confirmPwd" type="password" placeholder="Confirmer le mot de passe" style="letter-spacing:normal;font-size:.9rem;font-weight:400">
       </div>
       <div class="modal-feedback" id="fb3"></div>
-      <button class="modal-btn" id="reset-pwd-btn" onclick="resetPassword()">💾 Enregistrer</button>
+      <button class="modal-btn" id="reset-pwd-btn" onclick="resetPassword()">
+        <span class="btn-icon">{SVG["save"]}</span>
+        Enregistrer
+      </button>
 
     </div>
 
     <!-- Étape 4 : succès -->
     <div class="modal-step" id="step4">
-      <p style="font-size:1.8rem;text-align:center">✅</p>
+      <div class="modal-success-icon">{SVG["success"]}</div>
       <p>Votre mot de passe a été réinitialisé avec succès !</p>
       <button class="modal-btn" id="close-modal-success-btn" onclick="closeModal()">Retour à la connexion</button>
 
