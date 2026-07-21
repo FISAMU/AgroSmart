@@ -1,7 +1,8 @@
 # logic/diagnostic.py
 import joblib
 import os
-from firebase_admin import firestore
+
+from db.neon import get_culture
 
 MODEL_DIR = os.path.join("models", "diagnostic")
 ENCODER_PATH = os.path.join(MODEL_DIR, "encoder_diagnostic.pkl")
@@ -14,15 +15,14 @@ def obtenir_etat_sol(ph_actuel, hum_actuelle, nom_culture):
     Retourne un conseil lisible par un non-expert.
     """
     try:
-        db = firestore.client()
-        doc = db.collection("cultures_ref").document(nom_culture).get()
+        ref_row = get_culture(nom_culture)
     except Exception as e:
-        return f"ERREUR_FIRESTORE:{e}"
+        return f"ERREUR_DB:{e}"
 
-    if not doc.exists:
-        return "Culture inconnue. Vérifiez le nom de la culture ou ajoutez-la dans Firestore."
+    if not ref_row:
+        return "Culture inconnue. Vérifiez le nom de la culture ou ajoutez-la dans la base."
 
-    ref = doc.to_dict()
+    ref = ref_row
     hum_min = ref.get("hum_min", 0)
     hum_optimal = ref.get("hum_optimal")
     ph_min = ref.get("ph_min", 0)

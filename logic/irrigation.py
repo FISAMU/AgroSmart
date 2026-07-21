@@ -1,7 +1,8 @@
 # logic/irrigation.py
 import joblib
 import os
-from firebase_admin import firestore
+
+from db.neon import get_culture
 
 MODEL_DIR = os.path.join("models", "irrigation")
 MODEL_PATH = os.path.join(MODEL_DIR, "model_irrigation.pkl")
@@ -22,15 +23,14 @@ def predire_quantite_eau_expert(nom_culture, etat_diagnostic):
     Calcul classique basé sur les règles Firestore.
     """
     try:
-        db = firestore.client()
-        doc = db.collection("cultures_ref").document(nom_culture).get()
+        ref_row = get_culture(nom_culture)
     except Exception:
         return 0.0
 
-    if not doc.exists:
+    if not ref_row:
         return 0.0
 
-    ref = doc.to_dict()
+    ref = ref_row
     besoin_base = ref.get("besoin_eau_base", 10.0)
 
     if etat_diagnostic == "DEFICIT_HYDRIQUE":

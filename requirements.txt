@@ -1,0 +1,10 @@
+streamlit
+streamlit-autorefresh
+pandas
+plotly
+scikit-learn
+joblib
+requests
+psycopg2-binary
+python-dotenv
+bcrypt

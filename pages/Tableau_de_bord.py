@@ -1,30 +1,215 @@
 import streamlit as st
-import base64
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-import firebase_admin
-from firebase_admin import credentials, firestore
 import pandas as pd
-import plotly.express as px
-from streamlit_autorefresh import st_autorefresh
-from logic import diagnostic, irrigation # Importation de tes modules
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from logic import diagnostic, irrigation
+from db.neon import (
+    ensure_schema,
+    get_user,
+    list_culture_names,
+    get_sensor_readings,
+    set_config,
+)
 
-# 1. Actualisation automatique (10 secondes) — sera activée seulement sur le Tableau de bord
-# (évite les rechargements continus sur les pages Diagnostic / Irrigation)
+from ui.theme import (
+    STREAMLIT_DASHBOARD,
+    render_dashboard_sidebar,
+    COLORS,
+    SVG,
+)
 
-# 2. Configuration de la page
-st.set_page_config(page_title="AgroSmart - Dashboard", layout="wide", initial_sidebar_state="collapsed")
+ensure_schema()
 
-# Initialisation Firebase
-if not firebase_admin._apps:
-    base_path = os.path.dirname(os.path.dirname(__file__))
-    key_path = os.path.join(base_path, "serviceAccountKey.json")
-    if os.path.exists(key_path):
-        cred = credentials.Certificate(key_path)
-        firebase_admin.initialize_app(cred)
+CHART_POINTS = 60
+LIVE_REFRESH_SECONDS = 10
 
-db = firestore.client()
+
+def _load_sensor_data(user_id: str):
+    """Charge uniquement les données capteurs (sans requête utilisateur)."""
+    current_temp, current_hum, current_ph = "--", "--", "--"
+    df, latest = pd.DataFrame(), None
+    readings = get_sensor_readings(user_id, limit=CHART_POINTS)
+    if readings:
+        df = pd.DataFrame(readings)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp")
+        latest = df.iloc[-1]
+        current_temp = f"{latest.get('temperature', latest.get('temp', '--'))} °C"
+        current_hum = f"{latest.get('humidite', latest.get('humidity', '--'))} %"
+        current_ph = str(latest.get("ph", "--"))
+    return current_temp, current_hum, current_ph, df, latest
+
+
+def _load_dashboard_user(user_id: str) -> tuple[str, str]:
+    if st.session_state.get("dash_user_id") != user_id:
+        st.session_state.dash_user_id = user_id
+        st.session_state.pop("dash_user_name", None)
+    if "dash_user_name" not in st.session_state:
+        u_data = get_user(user_id)
+        name = u_data.get("prenom", "Agriculteur").capitalize() if u_data else "Agriculteur"
+        st.session_state.dash_user_name = name
+    user_name = st.session_state.dash_user_name
+    return user_name, user_name[0].upper()
+
+
+def render_dashboard_header(user_name: str, user_initial: str, has_data: bool) -> None:
+    """En-tête statique — ne clignote pas à chaque refresh."""
+    head_left, head_right = st.columns([2.5, 1])
+    with head_left:
+        st.markdown(f'<p class="dash-page-title">Bonjour, {user_name}</p>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="dash-page-caption">Suivi en temps réel de vos paramètres agricoles</p>',
+            unsafe_allow_html=True,
+        )
+    with head_right:
+        live = "En direct" if has_data else "En attente capteurs"
+        st.markdown(
+            f'<div class="dash-live-badge"><span class="dash-live-dot"></span>{live}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="text-align:right;font-size:0.82rem;color:{COLORS["text_body"]};margin-top:6px;">'
+            f'{user_initial} · {user_name}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+@st.fragment(run_every=LIVE_REFRESH_SECONDS)
+def render_live_metrics(user_id: str) -> None:
+    """Met à jour uniquement métriques + graphique (sans recharger l'en-tête)."""
+    try:
+        current_temp, current_hum, current_ph, df, _ = _load_sensor_data(user_id)
+    except Exception as e:
+        st.error(f"Erreur : {e}")
+        return
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Température", current_temp, help="Sol · capteur IoT")
+    with m2:
+        st.metric("Humidité", current_hum, help="Taux d'humidité du sol")
+    with m3:
+        st.metric("pH Sol", current_ph, help="Acidité · alcalinité")
+
+    if not df.empty:
+        fig, last_ts = build_live_chart(df)
+        last_label = last_ts.strftime("%H:%M:%S") if last_ts is not None else "—"
+        st.markdown(
+            f"""
+            <div class="dash-chart-card">
+              <div class="dash-live-badge" style="justify-content:flex-start;margin-bottom:0.75rem;">
+                {SVG["chart"]} Évolution des paramètres
+                <span style="margin-left:auto;">Live · MAJ {last_label}</span>
+              </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key="live_chart",
+            config={"displayModeBar": False, "staticPlot": False},
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info("Lancez le simulateur IoT (`python iot_simulator.py`) pour voir les graphiques en direct.")
+
+
+def render_dashboard_page(user_id: str) -> None:
+    user_name, user_initial = _load_dashboard_user(user_id)
+    _, _, _, df, _ = _load_sensor_data(user_id)
+    render_dashboard_header(user_name, user_initial, not df.empty)
+    render_live_metrics(user_id)
+
+
+def _series(df: pd.DataFrame, *candidates: str) -> pd.Series:
+    for name in candidates:
+        if name in df.columns:
+            return pd.to_numeric(df[name], errors="coerce")
+    return pd.Series(dtype=float)
+
+
+def build_live_chart(df: pd.DataFrame):
+    """Graphique multi-séries temps réel (température, humidité, pH)."""
+    chart_df = df.sort_values("timestamp").tail(CHART_POINTS).copy()
+    temp = _series(chart_df, "temperature", "temp", "Temperature_C")
+    hum = _series(chart_df, "humidite", "humidity", "Humidity")
+    ph = _series(chart_df, "ph", "Soil_pH")
+    times = chart_df["timestamp"]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=times, y=temp, name="Température (°C)",
+            mode="lines+markers",
+            line=dict(color="#C2410C", width=2.5),
+            marker=dict(size=5),
+            hovertemplate="%{y:.2f} °C<extra>Température</extra>",
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times, y=hum, name="Humidité (%)",
+            mode="lines+markers",
+            line=dict(color="#0369A1", width=2.5),
+            marker=dict(size=5),
+            hovertemplate="%{y:.2f} %<extra>Humidité</extra>",
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=times, y=ph, name="pH sol",
+            mode="lines+markers",
+            line=dict(color=COLORS["forest"], width=2.5, dash="dot"),
+            marker=dict(size=5),
+            hovertemplate="%{y:.2f}<extra>pH sol</extra>",
+        ),
+        secondary_y=True,
+    )
+
+    last_ts = times.iloc[-1] if not times.empty else None
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_family="Plus Jakarta Sans, Segoe UI, sans-serif",
+        font_color=COLORS["text_dark"],
+        margin=dict(l=8, r=8, t=16, b=8),
+        height=360,
+        hovermode="x unified",
+        uirevision="agrosmart-live",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=11)),
+        xaxis=dict(
+            gridcolor="rgba(27,67,50,0.08)",
+            showline=False,
+            rangeslider=dict(visible=True, thickness=0.06),
+            type="date",
+        ),
+    )
+    fig.update_yaxes(
+        title_text="Temp. / Humidité",
+        gridcolor="rgba(27,67,50,0.08)",
+        showline=False,
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text="pH",
+        gridcolor="rgba(27,67,50,0.04)",
+        showline=False,
+        secondary_y=True,
+    )
+    return fig, last_ts
+
+
+st.set_page_config(page_title="AgroSmart - Dashboard", layout="wide", initial_sidebar_state="expanded")
+st.set_option("client.showSidebarNavigation", False)
+st.markdown(STREAMLIT_DASHBOARD, unsafe_allow_html=True)
 
 # --- FONCTIONS D'ESPACES (AJOUTS) ---
 
@@ -44,10 +229,9 @@ def _choice_index(value, choices):
         return 0
 
 
-def afficher_diagnostic_espace(db, latest):
+def afficher_diagnostic_espace(latest):
     st.subheader("Analyse de santé du sol")
-    cultures_docs = db.collection("cultures_ref").stream()
-    noms_cultures = [doc.id for doc in cultures_docs]
+    noms_cultures = list_culture_names()
     culture = st.selectbox("Sélectionnez votre culture :", noms_cultures)
     st.session_state["selected_crop"] = culture
 
@@ -215,11 +399,10 @@ def afficher_diagnostic_espace(db, latest):
             st.session_state["diagnostic_submitted"] = False
             st.rerun()
 
-def afficher_irrigation_espace(db, latest):
+def afficher_irrigation_espace(latest):
     st.subheader("Gestion de l'irrigation")
     selected_crop = st.session_state.get("selected_crop")
-    cultures_docs = db.collection("cultures_ref").stream()
-    noms_cultures = [doc.id for doc in cultures_docs]
+    noms_cultures = list_culture_names()
 
     if selected_crop:
         culture = selected_crop
@@ -363,41 +546,28 @@ if not st.session_state.get("user"):
     st.stop()
 
 user_id = st.session_state.get("user")
-db.collection("config").document("simulator").set({"active_user_id": user_id})
+set_config("active_user_id", user_id)
 
 if "active_interface" not in st.session_state:
     st.session_state.active_interface = "Tableau de bord"
 
-# Activer l'auto-refresh uniquement quand on est sur le Tableau de bord
-if st.session_state.active_interface == "Tableau de bord":
-    st_autorefresh(interval=10000, key="datarefresh")
+with st.sidebar:
+    render_dashboard_sidebar(st.session_state.active_interface)
 
-with st.container():
-    with st.popover("☰ Menu"):
-        if st.button("📊 Tableau de bord", use_container_width=True):
-            st.session_state.active_interface = "Tableau de bord"; st.rerun()
-        if st.button("🌱 Diagnostic pédologique", use_container_width=True):
-            st.session_state.active_interface = "Diagnostic pédologique"; st.rerun()
-        if st.button("💧 Irrigation", use_container_width=True):
-            st.session_state.active_interface = "Irrigation"; st.rerun()
-        if st.button("⚙️ Paramètres", use_container_width=True):
-            st.session_state.active_interface = "Paramètres"; st.rerun()
-
-# 4. Récupération des données (Placement ici pour avoir 'latest' dispo partout)
+# 4. Récupération des données pour les sous-pages
 user_name, user_initial = "Agriculteur", "A"
 current_temp, current_hum, current_ph = "--", "--", "--"
 df, latest = pd.DataFrame(), None
 
 try:
-    u_doc = db.collection("users").document(user_id).get()
-    if u_doc.exists:
-        u_data = u_doc.to_dict()
+    u_data = get_user(user_id)
+    if u_data:
         user_name = u_data.get("prenom", "Agriculteur").capitalize()
         user_initial = user_name[0].upper()
-    query = db.collection("users").document(user_id).collection("donnees_capteurs").order_by("timestamp", direction="DESCENDING").limit(30).get()
-    if query:
-        data_list = [d.to_dict() for d in query]
-        df = pd.DataFrame(data_list)
+
+    readings = get_sensor_readings(user_id, limit=CHART_POINTS)
+    if readings:
+        df = pd.DataFrame(readings)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values("timestamp")
         latest = df.iloc[-1]
@@ -409,54 +579,20 @@ except Exception as e:
 
 # Navigation logic
 if st.session_state.active_interface != "Tableau de bord":
-    st.markdown(f"<h1 style='color: #7ed997;'>{st.session_state.active_interface}</h1>", unsafe_allow_html=True)
+    st.markdown(f'<p class="page-title">{st.session_state.active_interface}</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Configurez les paramètres et lancez l\'analyse.</p>', unsafe_allow_html=True)
     # Appeler les interfaces même si 'latest' est None : la fonction utilise des valeurs par défaut
     if st.session_state.active_interface == "Diagnostic pédologique":
         if latest is None:
             st.warning("Données capteurs indisponibles. Utilisation de valeurs par défaut pour le diagnostic.")
-        afficher_diagnostic_espace(db, latest)
+        afficher_diagnostic_espace(latest)
     elif st.session_state.active_interface == "Irrigation":
         if latest is None:
             st.warning("Données capteurs indisponibles. Utilisation de valeurs par défaut pour l'irrigation.")
-        afficher_irrigation_espace(db, latest)
+        afficher_irrigation_espace(latest)
     elif st.session_state.active_interface == "Paramètres":
         st.info("Interface Paramètres")
-    if st.button("⬅️ Retour au Tableau de bord"):
-        st.session_state.active_interface = "Tableau de bord"; st.rerun()
     st.stop()
 
-# 5. Dashboard Design
-st.markdown("<style>#MainMenu, header, footer {visibility: hidden !important;} [data-testid='stSidebar'] {display: none !important;} .stApp {background-color: #0f1a14;}</style>", unsafe_allow_html=True)
-
-html_dashboard = f"""
-<div style="font-family: 'Poppins', sans-serif; color: white;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h1 style="font-size: 1.8rem; color: #7ed997;">Bonjour, {user_name} 👋</h1>
-        <div style="background: rgba(255,255,255,0.05); padding: 5px 15px; border-radius: 20px; display: flex; align-items: center; gap: 10px;">
-            <div style="width: 30px; height: 30px; background: #7ed997; border-radius: 50%; color: #0f1a14; display: flex; align-items: center; justify-content: center; font-weight: bold;">{user_initial}</div>
-            <span>{user_name}</span>
-        </div>
-    </div>
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
-        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(126, 217, 151, 0.2); border-radius: 15px; padding: 20px; text-align: center;">
-            <span style="color:#a4b4ab;">🌡️ Température</span><div style="font-size: 1.5rem; font-weight: bold; color: #7ed997;">{current_temp}</div>
-        </div>
-        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(126, 217, 151, 0.2); border-radius: 15px; padding: 20px; text-align: center;">
-            <span style="color:#a4b4ab;">💧 Humidité</span><div style="font-size: 1.5rem; font-weight: bold; color: #7ed997;">{current_hum}</div>
-        </div>
-        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(126, 217, 151, 0.2); border-radius: 15px; padding: 20px; text-align: center;">
-            <span style="color:#a4b4ab;">🧪 pH Sol</span><div style="font-size: 1.5rem; font-weight: bold; color: #7ed997;">{current_ph}</div>
-        </div>
-    </div>
-</div>
-"""
-st.components.v1.html(html_dashboard, height=200)
-
-if not df.empty:
-    st.write("---")
-    st.subheader("📈 Évolution des paramètres")
-    fig = px.line(df, x="timestamp", y=[c for c in ['temperature', 'humidite', 'temp', 'humidity'] if c in df.columns], template="plotly_dark", color_discrete_sequence=["#7ed997", "#3d85c6"])
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Lancez le simulateur pour voir les graphiques.")
+# 5. Tableau de bord — composants natifs (texte net) + fragment live
+render_dashboard_page(user_id)
